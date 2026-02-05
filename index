@@ -1,0 +1,590 @@
+import { useState, useEffect, useCallback } from "react";
+
+const POWER_TYPES = [
+  { id: "legitimate", name: "Legitimate Power", short: "Legitimate", description: "Power derived from your formal position, role, or title", color: "#3b82f6", source: "French & Raven (1959)" },
+  { id: "reward", name: "Reward Power", short: "Reward", description: "Power to provide benefits, recognition, or positive outcomes", color: "#10b981", source: "French & Raven (1959)" },
+  { id: "coercive", name: "Coercive Power", short: "Coercive", description: "Power to impose penalties, consequences, or sanctions", color: "#ef4444", source: "French & Raven (1959)" },
+  { id: "expert", name: "Expert Power", short: "Expert", description: "Power based on knowledge, skills, or specialized expertise", color: "#8b5cf6", source: "French & Raven (1959)" },
+  { id: "referent", name: "Referent Power", short: "Referent", description: "Power from personal characteristics, charisma, or relationships", color: "#f59e0b", source: "French & Raven (1959)" },
+  { id: "informational", name: "Informational Power", short: "Informational", description: "Power from access to or control of important information", color: "#06b6d4", source: "Raven (1965)" },
+  { id: "charismatic", name: "Charismatic Power", short: "Charismatic", description: "Power derived from exceptional personal qualities that inspire devotion", color: "#ec4899", source: "Weber (1920s)" },
+  { id: "moral", name: "Moral Power", short: "Moral", description: "Power from being perceived as ethically sound and morally credible", color: "#14b8a6", source: "Mehta & Winship (2010)" },
+  { id: "convening", name: "Convening Power", short: "Convening", description: "Power to bring diverse stakeholders together and facilitate collaboration", color: "#a855f7", source: "Contemporary concept" },
+];
+
+const STORAGE_KEY = "cohort-power-submissions-v1";
+
+function RadarChart({ data, size = 420 }) {
+  const center = size / 2;
+  const maxRadius = size * 0.34;
+  const levels = 5;
+  const maxVal = Math.max(...data.map((d) => d.value), 1);
+
+  const getPoint = (index, value, total, radius) => {
+    const angle = (Math.PI * 2 * index) / total - Math.PI / 2;
+    const r = (value / 5) * radius;
+    return { x: center + Math.cos(angle) * r, y: center + Math.sin(angle) * r };
+  };
+
+  const getLabelPoint = (index, total) => {
+    const angle = (Math.PI * 2 * index) / total - Math.PI / 2;
+    const r = maxRadius + 45;
+    return { x: center + Math.cos(angle) * r, y: center + Math.sin(angle) * r };
+  };
+
+  const normalizedData = data.map((d) => ({
+    ...d,
+    normalized: maxVal > 0 ? (d.value / maxVal) * 5 : 0,
+  }));
+
+  const polygonPoints = normalizedData
+    .map((d, i) => {
+      const p = getPoint(i, d.normalized, data.length, maxRadius);
+      return `${p.x},${p.y}`;
+    })
+    .join(" ");
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block", margin: "0 auto", maxWidth: "100%" }}>
+      {/* Grid circles */}
+      {Array.from({ length: levels }, (_, i) => (
+        <circle key={i} cx={center} cy={center} r={(maxRadius / levels) * (i + 1)} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+      ))}
+      {/* Axes */}
+      {data.map((_, i) => {
+        const p = getPoint(i, 5, data.length, maxRadius);
+        return <line key={i} x1={center} y1={center} x2={p.x} y2={p.y} stroke="#e5e7eb" strokeWidth="1" />;
+      })}
+      {/* Filled polygon */}
+      <polygon points={polygonPoints} fill="rgba(8,31,93,0.15)" stroke="#081F5D" strokeWidth="2.5" />
+      {/* Data points */}
+      {normalizedData.map((d, i) => {
+        const p = getPoint(i, d.normalized, data.length, maxRadius);
+        return (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r="5" fill="#081F5D" stroke="white" strokeWidth="2" />
+          </g>
+        );
+      })}
+      {/* Labels */}
+      {data.map((d, i) => {
+        const lp = getLabelPoint(i, data.length);
+        const words = d.short.split(" ");
+        return (
+          <g key={`label-${i}`}>
+            <circle cx={lp.x} cy={lp.y - 16} r="5" fill={d.color} />
+            {words.map((w, wi) => (
+              <text key={wi} x={lp.x} y={lp.y + wi * 13} textAnchor="middle" fontSize="11" fontWeight="500" fill="#374151">
+                {w}
+              </text>
+            ))}
+            <text x={lp.x} y={lp.y + words.length * 13 + 2} textAnchor="middle" fontSize="10" fill="#6b7280">
+              ({d.value})
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+export default function CohortPowerMapping() {
+  const [view, setView] = useState("submit"); // submit | results | admin
+  const [selected, setSelected] = useState([]);
+  const [ranked, setRanked] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState("");
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+
+  const loadSubmissions = useCallback(async () => {
+    try {
+      const result = await window.storage.get(STORAGE_KEY, true);
+      const parsed = result ? JSON.parse(result.value) : [];
+      setSubmissions(parsed);
+    } catch {
+      setSubmissions([]);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadSubmissions();
+  }, [loadSubmissions]);
+
+  const handleToggle = (id) => {
+    if (selected.includes(id)) {
+      setSelected(selected.filter((s) => s !== id));
+      setRanked(ranked.filter((r) => r !== id));
+    } else if (selected.length < 3) {
+      setSelected([...selected, id]);
+      setRanked([...ranked, id]);
+    }
+  };
+
+  const moveRank = (index, direction) => {
+    const newRanked = [...ranked];
+    const swapIndex = index + direction;
+    if (swapIndex < 0 || swapIndex >= newRanked.length) return;
+    [newRanked[index], newRanked[swapIndex]] = [newRanked[swapIndex], newRanked[index]];
+    setRanked(newRanked);
+  };
+
+  const handleSubmit = async () => {
+    if (ranked.length !== 3) { setError("Please select exactly 3 power types."); return; }
+
+    const newSubmission = {
+      top3: ranked,
+      timestamp: new Date().toISOString(),
+    };
+
+    const updated = [...submissions, newSubmission];
+    try {
+      await window.storage.set(STORAGE_KEY, JSON.stringify(updated), true);
+      setSubmissions(updated);
+      setSubmitted(true);
+      setError("");
+    } catch {
+      setError("Failed to save. Please try again.");
+    }
+  };
+
+  const handleReset = async () => {
+    if (!window.confirm("This will delete ALL submissions. Are you sure?")) return;
+    try {
+      await window.storage.delete(STORAGE_KEY, true);
+      setSubmissions([]);
+    } catch {}
+  };
+
+  const getAggregatedData = () => {
+    const counts = {};
+    POWER_TYPES.forEach((p) => (counts[p.id] = 0));
+    submissions.forEach((s) => {
+      s.top3.forEach((id, rank) => {
+        counts[id] += 3 - rank; // 3 pts for #1, 2 pts for #2, 1 pt for #3
+      });
+    });
+    return POWER_TYPES.map((p) => ({
+      ...p,
+      value: counts[p.id],
+      votes: submissions.filter((s) => s.top3.includes(p.id)).length,
+    }));
+  };
+
+  const getSimpleCounts = () => {
+    const counts = {};
+    POWER_TYPES.forEach((p) => (counts[p.id] = 0));
+    submissions.forEach((s) => {
+      s.top3.forEach((id) => { counts[id]++; });
+    });
+    return POWER_TYPES.map((p) => ({ ...p, value: counts[p.id] }));
+  };
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f9fafb", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" }}>
+        <div style={{ textAlign: "center", color: "#6b7280" }}>
+          <div style={{ width: 40, height: 40, border: "3px solid #e5e7eb", borderTop: "3px solid #081F5D", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 16px" }} />
+          Loading...
+          <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  const aggData = getAggregatedData();
+  const simpleCounts = getSimpleCounts();
+  const sortedAgg = [...aggData].sort((a, b) => b.value - a.value);
+  const maxWeighted = Math.max(...aggData.map((d) => d.value), 1);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#f9fafb", padding: "20px", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif", lineHeight: 1.6 }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", background: "white", borderRadius: 12, boxShadow: "0 4px 6px rgba(0,0,0,0.1)", padding: "40px", position: "relative" }}>
+        
+        {/* Header */}
+        <h1 style={{ color: "#1f2937", fontSize: "1.85rem", margin: 0 }}>Cohort Power Mapping</h1>
+        <p style={{ color: "#6b7280", marginBottom: 8 }}>Based on French & Raven's Bases of Social Power, with contemporary additions</p>
+        <p style={{ color: "#9ca3af", fontSize: "0.85rem", marginBottom: 24 }}>{submissions.length} of 35 leaders submitted</p>
+
+        {/* Nav Tabs */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: "2px solid #e5e7eb" }}>
+          {[
+            { key: "submit", label: "Submit" },
+            { key: "results", label: `Cohort Map (${submissions.length})` },
+            { key: "admin", label: "Admin" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setView(tab.key)}
+              style={{
+                padding: "12px 24px",
+                border: "none",
+                borderBottom: view === tab.key ? "3px solid #081F5D" : "3px solid transparent",
+                background: "none",
+                color: view === tab.key ? "#081F5D" : "#6b7280",
+                fontWeight: view === tab.key ? 700 : 500,
+                fontSize: "0.95rem",
+                cursor: "pointer",
+                marginBottom: -2,
+                transition: "all 0.15s",
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ==================== SUBMIT VIEW ==================== */}
+        {view === "submit" && !submitted && (
+          <div>
+            <div style={{ background: "#e8edf7", borderLeft: "4px solid #081F5D", padding: 16, marginBottom: 24, fontSize: "0.9rem", color: "#374151" }}>
+              Based on your individual Power Perception Assessment results, select the <strong>top 3 power types</strong> you most identify with and rank them in order (1 = strongest).
+            </div>
+
+            {/* Power type selection */}
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: "block", fontWeight: 600, color: "#374151", marginBottom: 4, fontSize: "0.9rem" }}>
+                Select Your Top 3 Power Types <span style={{ fontWeight: 400, color: "#9ca3af" }}>({selected.length}/3)</span>
+              </label>
+              <p style={{ color: "#6b7280", fontSize: "0.8rem", marginBottom: 16 }}>Click to select, then rank them below</p>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 28 }}>
+              {POWER_TYPES.map((p) => {
+                const isSelected = selected.includes(p.id);
+                const isDisabled = !isSelected && selected.length >= 3;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => !isDisabled && handleToggle(p.id)}
+                    style={{
+                      padding: "16px 12px",
+                      border: isSelected ? `3px solid ${p.color}` : "3px solid #e5e7eb",
+                      borderRadius: 10,
+                      background: isSelected ? `${p.color}10` : isDisabled ? "#f3f4f6" : "white",
+                      cursor: isDisabled ? "not-allowed" : "pointer",
+                      opacity: isDisabled ? 0.4 : 1,
+                      transition: "all 0.15s",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ width: 12, height: 12, borderRadius: "50%", background: p.color, margin: "0 auto 8px" }} />
+                    <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "#1f2937", marginBottom: 4 }}>{p.short}</div>
+                    <div style={{ fontSize: "0.7rem", color: "#6b7280", lineHeight: 1.4 }}>{p.description.slice(0, 60)}...</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Ranking */}
+            {ranked.length > 0 && (
+              <div style={{ marginBottom: 28 }}>
+                <label style={{ display: "block", fontWeight: 600, color: "#374151", marginBottom: 12, fontSize: "0.9rem" }}>
+                  Rank Your Selections (drag or use arrows)
+                </label>
+                {ranked.map((id, i) => {
+                  const p = POWER_TYPES.find((t) => t.id === id);
+                  return (
+                    <div
+                      key={id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "12px 16px",
+                        background: i === 0 ? "#e8edf7" : "#f9fafb",
+                        border: `2px solid ${p.color}`,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <div style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: "50%",
+                        background: "#081F5D",
+                        color: "white",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: 700,
+                        fontSize: "0.85rem",
+                        flexShrink: 0,
+                      }}>
+                        {i + 1}
+                      </div>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: p.color, flexShrink: 0 }} />
+                      <div style={{ flex: 1, fontWeight: 600, fontSize: "0.9rem", color: "#1f2937" }}>{p.name}</div>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button
+                          onClick={() => moveRank(i, -1)}
+                          disabled={i === 0}
+                          style={{
+                            width: 28, height: 28, border: "1px solid #d1d5db", borderRadius: 6,
+                            background: "white", cursor: i === 0 ? "not-allowed" : "pointer",
+                            opacity: i === 0 ? 0.3 : 1, fontSize: "0.8rem",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                        >▲</button>
+                        <button
+                          onClick={() => moveRank(i, 1)}
+                          disabled={i === ranked.length - 1}
+                          style={{
+                            width: 28, height: 28, border: "1px solid #d1d5db", borderRadius: 6,
+                            background: "white", cursor: i === ranked.length - 1 ? "not-allowed" : "pointer",
+                            opacity: i === ranked.length - 1 ? 0.3 : 1, fontSize: "0.8rem",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                        >▼</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                <p style={{ fontSize: "0.75rem", color: "#9ca3af", marginTop: 4 }}>
+                  #1 = 3 points, #2 = 2 points, #3 = 1 point toward cohort weighted score
+                </p>
+              </div>
+            )}
+
+            {error && <div style={{ color: "#ef4444", fontSize: "0.875rem", marginBottom: 16, fontWeight: 500 }}>{error}</div>}
+
+            <button
+              onClick={handleSubmit}
+              disabled={ranked.length !== 3}
+              style={{
+                width: "100%",
+                padding: "16px",
+                background: ranked.length === 3 ? "#081F5D" : "#9ca3af",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                fontSize: "1rem",
+                fontWeight: 600,
+                cursor: ranked.length === 3 ? "pointer" : "not-allowed",
+                transition: "all 0.15s",
+              }}
+            >
+              Submit My Top 3
+            </button>
+          </div>
+        )}
+
+        {/* ==================== SUBMITTED CONFIRMATION ==================== */}
+        {view === "submit" && submitted && (
+          <div style={{ textAlign: "center", padding: "48px 0" }}>
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#e8edf7", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: "1.8rem" }}>✓</div>
+            <h2 style={{ color: "#1f2937", marginBottom: 8 }}>Submitted!</h2>
+            <p style={{ color: "#6b7280", marginBottom: 8 }}>Thank you! Your top 3 have been recorded.</p>
+            <p style={{ color: "#6b7280", fontSize: "0.85rem", marginBottom: 24 }}>
+              {ranked.map((id, i) => {
+                const p = POWER_TYPES.find((t) => t.id === id);
+                return `${i + 1}. ${p.name}`;
+              }).join("  •  ")}
+            </p>
+            <button
+              onClick={() => setView("results")}
+              style={{
+                padding: "12px 32px",
+                background: "#081F5D",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                fontSize: "1rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              View Cohort Map →
+            </button>
+          </div>
+        )}
+
+        {/* ==================== RESULTS VIEW ==================== */}
+        {view === "results" && (
+          <div>
+            {submissions.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "48px 0", color: "#6b7280" }}>
+                <p style={{ fontSize: "1.1rem", marginBottom: 8 }}>No submissions yet</p>
+                <p style={{ fontSize: "0.85rem" }}>Once leaders submit their top 3, the cohort map will appear here.</p>
+              </div>
+            ) : (
+              <>
+                {/* Radar Chart */}
+                <div style={{ marginBottom: 40 }}>
+                  <h3 style={{ color: "#374151", marginBottom: 4, fontSize: "1.125rem" }}>Cohort Power Map</h3>
+                  <p style={{ color: "#9ca3af", fontSize: "0.8rem", marginBottom: 16 }}>Weighted scores: #1 pick = 3pts, #2 = 2pts, #3 = 1pt</p>
+                  <RadarChart data={simpleCounts} size={420} />
+                </div>
+
+                {/* Bar Chart Breakdown */}
+                <h3 style={{ color: "#374151", marginBottom: 16, fontSize: "1.125rem" }}>Weighted Scores (Ranked)</h3>
+                {sortedAgg.map((p, i) => (
+                  <div key={p.id} style={{ marginBottom: 16, padding: "16px 20px", border: `2px solid ${p.color}20`, borderLeft: `4px solid ${p.color}`, borderRadius: 8, background: i === 0 ? `${p.color}08` : "white" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 12, height: 12, borderRadius: "50%", background: p.color }} />
+                        <span style={{ fontWeight: 600, color: "#1f2937", fontSize: "0.95rem" }}>{p.name}</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: 700, fontSize: "1.3rem", color: "#1f2937" }}>{p.value}</span>
+                        <span style={{ fontSize: "0.8rem", color: "#6b7280" }}> pts</span>
+                        <span style={{ fontSize: "0.75rem", color: "#9ca3af", marginLeft: 8 }}>({p.votes} leaders)</span>
+                      </div>
+                    </div>
+                    <div style={{ height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${(p.value / maxWeighted) * 100}%`, background: p.color, borderRadius: 4, transition: "width 0.5s ease" }} />
+                    </div>
+                  </div>
+                ))}
+
+                {/* Individual Submissions Table */}
+                <h3 style={{ color: "#374151", marginBottom: 12, marginTop: 36, fontSize: "1.125rem" }}>Individual Submissions</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <thead>
+                      <tr style={{ background: "#f9fafb" }}>
+                        <th style={{ textAlign: "left", padding: "10px 12px", borderBottom: "2px solid #e5e7eb", color: "#374151", fontWeight: 600 }}>#</th>
+                        <th style={{ textAlign: "left", padding: "10px 12px", borderBottom: "2px solid #e5e7eb", color: "#374151", fontWeight: 600 }}>#1 (3pts)</th>
+                        <th style={{ textAlign: "left", padding: "10px 12px", borderBottom: "2px solid #e5e7eb", color: "#374151", fontWeight: 600 }}>#2 (2pts)</th>
+                        <th style={{ textAlign: "left", padding: "10px 12px", borderBottom: "2px solid #e5e7eb", color: "#374151", fontWeight: 600 }}>#3 (1pt)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {submissions.map((s, i) => (
+                        <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                          <td style={{ padding: "10px 12px", fontWeight: 500, color: "#9ca3af", fontSize: "0.8rem" }}>{i + 1}</td>
+                          {s.top3.map((id, rank) => {
+                            const p = POWER_TYPES.find((t) => t.id === id);
+                            return (
+                              <td key={rank} style={{ padding: "10px 12px" }}>
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: p?.color || "#ccc", display: "inline-block" }} />
+                                  <span style={{ color: "#374151" }}>{p?.short || id}</span>
+                                </span>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Reflection */}
+                <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 24, marginTop: 36 }}>
+                  <h3 style={{ fontSize: "1.125rem", fontWeight: 600, color: "#1f2937", marginBottom: 12 }}>Cohort Reflection Questions</h3>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {[
+                      "Which power types dominate our cohort? What does this say about our collective leadership style?",
+                      "Which power types are underrepresented? What blind spots might this create?",
+                      "How might we leverage our diverse power profiles to complement each other?",
+                      "What surprised you about the cohort's overall power distribution?",
+                      "How could we intentionally develop the power types that are less present in our group?",
+                    ].map((q, i) => (
+                      <li key={i} style={{ color: "#374151", marginBottom: 8, fontSize: "0.9rem", display: "flex" }}>
+                        <span style={{ marginRight: 8 }}>•</span>
+                        <span>{q}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ==================== ADMIN VIEW ==================== */}
+        {view === "admin" && !adminUnlocked && (
+          <div style={{ textAlign: "center", padding: "48px 0" }}>
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#e8edf7", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: "1.5rem" }}>🔒</div>
+            <h2 style={{ color: "#1f2937", marginBottom: 8 }}>Admin Access</h2>
+            <p style={{ color: "#6b7280", marginBottom: 24, fontSize: "0.9rem" }}>Enter the facilitator password to continue.</p>
+            <div style={{ maxWidth: 300, margin: "0 auto" }}>
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    if (adminPassword === "Risa44!") setAdminUnlocked(true);
+                    else { setAdminPassword(""); setError("Incorrect password."); }
+                  }
+                }}
+                placeholder="Enter password"
+                style={{
+                  width: "100%", padding: "12px 16px", border: "2px solid #e5e7eb", borderRadius: 8,
+                  fontSize: "1rem", outline: "none", marginBottom: 12, textAlign: "center",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#081F5D")}
+                onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+              />
+              {error && view === "admin" && <div style={{ color: "#ef4444", fontSize: "0.85rem", marginBottom: 12 }}>{error}</div>}
+              <button
+                onClick={() => {
+                  if (adminPassword === "Risa44!") { setAdminUnlocked(true); setError(""); }
+                  else { setAdminPassword(""); setError("Incorrect password."); }
+                }}
+                style={{ width: "100%", padding: "12px", background: "#081F5D", color: "white", border: "none", borderRadius: 8, fontSize: "0.95rem", fontWeight: 600, cursor: "pointer" }}
+              >
+                Unlock
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === "admin" && adminUnlocked && (
+          <div>
+            <div style={{ background: "#e8edf7", borderLeft: "4px solid #081F5D", padding: 16, marginBottom: 24, fontSize: "0.9rem", color: "#374151" }}>
+              <strong>Facilitator Controls</strong> — Use this tab to manage submissions. The reset button will clear all data.
+            </div>
+
+            <div style={{ display: "flex", gap: 16, marginBottom: 32, flexWrap: "wrap" }}>
+              <div style={{ padding: "20px 24px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb", flex: 1, minWidth: 150 }}>
+                <div style={{ fontSize: "2rem", fontWeight: 700, color: "#081F5D" }}>{submissions.length}</div>
+                <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Submissions</div>
+              </div>
+              <div style={{ padding: "20px 24px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb", flex: 1, minWidth: 150 }}>
+                <div style={{ fontSize: "2rem", fontWeight: 700, color: "#081F5D" }}>{35 - submissions.length}</div>
+                <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Remaining</div>
+              </div>
+            </div>
+
+            <button
+              onClick={loadSubmissions}
+              style={{ padding: "12px 24px", background: "#081F5D", color: "white", border: "none", borderRadius: 8, fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", marginRight: 12 }}
+            >
+              🔄 Refresh Data
+            </button>
+
+            <button
+              onClick={handleReset}
+              style={{ padding: "12px 24px", background: "#ef4444", color: "white", border: "none", borderRadius: 8, fontSize: "0.9rem", fontWeight: 600, cursor: "pointer" }}
+            >
+              🗑️ Reset All Submissions
+            </button>
+
+            {submissions.length > 0 && (
+              <div style={{ marginTop: 32 }}>
+                <h3 style={{ color: "#374151", marginBottom: 12, fontSize: "1rem" }}>All Submissions</h3>
+                {submissions.map((s, i) => (
+                  <div key={i} style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span style={{ fontWeight: 600, color: "#1f2937" }}>Submission {i + 1}</span>
+                      <span style={{ color: "#9ca3af", fontSize: "0.8rem", marginLeft: 12 }}>
+                        {s.top3.map((id) => POWER_TYPES.find((t) => t.id === id)?.short).join(" → ")}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>{new Date(s.timestamp).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
